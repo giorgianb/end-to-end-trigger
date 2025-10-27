@@ -104,7 +104,7 @@ def load_file(filename):
                 trigger_node=f['trigger_node'],
                 particle_id=f['particle_id'],
                 particle_type=f['particle_type'],
-                parent_particle_type=f['parent_particle_type'],
+                parent_particle_type=(f['parent_particle_type'] if 'parent_particle_type' in f.keys() else np.nan),
                 cylindrical_std=f['cylindrical_std'],
                 hit_type=f['hit_type']
         )
@@ -112,7 +112,7 @@ def load_file(filename):
 
 
 
-def load_graph(filename, cylindrical_features_scale, phi_slope_max, z0_max, use_intt, use_cylindrical_std, use_hit_type):
+def load_graph(filename, cylindrical_features_scale, phi_slope_max, z0_max, use_intt, use_n_pixels, use_cylindrical_std, use_hit_type):
     event_info = load_file(filename)
 
     if not use_intt:
@@ -121,12 +121,18 @@ def load_graph(filename, cylindrical_features_scale, phi_slope_max, z0_max, use_
         keep = np.ones(event_info.layer_id.shape[0], dtype=bool)
 
 
-    x = np.concatenate([
-        event_info.hit_cylindrical/cylindrical_features_scale[None],
-        event_info.n_pixels.reshape(-1, 1), 
-        event_info.layer_id.reshape(-1, 1),
-    ], axis=-1)
-
+    if use_n_pixels:
+        x = np.concatenate([
+            event_info.hit_cylindrical/cylindrical_features_scale[None],
+            event_info.n_pixels.reshape(-1, 1), 
+            event_info.layer_id.reshape(-1, 1),
+        ], axis=-1)
+    else:
+        x = np.concatenate([
+            event_info.hit_cylindrical/cylindrical_features_scale[None],
+            event_info.layer_id.reshape(-1, 1),
+        ], axis=-1)
+ 
     if use_cylindrical_std:
         x = np.concatenate([x, event_info.cylindrical_std], axis=-1)
 
@@ -164,9 +170,10 @@ def load_graph(filename, cylindrical_features_scale, phi_slope_max, z0_max, use_
 class HitGraphDataset(Dataset):
     """PyTorch dataset specification for hit graphs"""
 
-    def __init__(self, input_dir=None, filelist=None, n_samples=None, real_weight=1.0, n_folders=1, input_dir2=None, phi_slope_max=0.03, z0_max=200, cylindrical_features_scale=(3, 1, 3), load_full_event=False, use_cylindrical_std=False, use_hit_type=False):
+    def __init__(self, input_dir=None, filelist=None, n_samples=None, real_weight=1.0, n_folders=1, input_dir2=None, phi_slope_max=0.03, z0_max=200, cylindrical_features_scale=(3, 1, 3), load_full_event=False, use_n_pixels=True, use_cylindrical_std=False, use_hit_type=False, force_inputdir2_nontrigger=False):
         self.load_full_event = load_full_event
         self.cylindrical_features_scale = np.array(cylindrical_features_scale)
+        self.epoch = 0
         if filelist is not None:
             self.metadata = pd.read_csv(os.path.expandvars(filelist))
             filenames = self.metadata.file.values
@@ -187,13 +194,19 @@ class HitGraphDataset(Dataset):
         self.fake_weight = 1 #real_weight / (2 * real_weight - 1)
         self.phi_slope_max = phi_slope_max
         self.z0_max = z0_max
+        self.use_n_pixels= use_n_pixels
         self.use_hit_type = use_hit_type
         self.use_cylindrical_std = use_hit_type
+        self.input_dir1 = input_dir
+        self.input_dir2 = input_dir2
+        self.force_inputdir2_nontrigger = force_inputdir2_nontrigger
 
 
     def __getitem__(self, index):
         event_file_name = self.filenames[index]
-        x, edge_index, y, event_info = load_graph(self.filenames[index], self.cylindrical_features_scale, self.phi_slope_max, self.z0_max, use_intt=True, use_cylindrical_std=self.use_cylindrical_std, use_hit_type=self.use_hit_type)
+        x, edge_index, y, event_info = load_graph(self.filenames[index], self.cylindrical_features_scale, self.phi_slope_max, self.z0_max, use_n_pixels=self.use_n_pixels, use_intt=True, use_cylindrical_std=self.use_cylindrical_std, use_hit_type=self.use_hit_type)
+        if self.force_inputdir2_nontrigger and os.path.dirname(event_file_name) == self.input_dir2:
+            y = np.zeros_like(y)
             
         if self.load_full_event:
             return torch_geometric.data.Data(
@@ -217,9 +230,9 @@ class HitGraphDataset(Dataset):
     def __len__(self):
         return len(self.filenames)
 
-def get_datasets(n_train, n_valid, input_dir=None, filelist=None, real_weight=1.0, n_folders=1, input_dir2=None, phi_slope_max=0.03, z0_max=200, load_full_event=False, use_cylindrical_std=False, use_hit_type=False):
+def get_datasets(n_train, n_valid, input_dir=None, filelist=None, real_weight=1.0, n_folders=1, input_dir2=None, phi_slope_max=0.03, z0_max=200, load_full_event=False, use_n_pixels=True, use_cylindrical_std=False, use_hit_type=False, force_inputdir2_nontrigger=False):
     data = HitGraphDataset(input_dir=input_dir, filelist=filelist,
-                           n_samples=n_train+n_valid, real_weight=real_weight, n_folders=n_folders, input_dir2=input_dir2, phi_slope_max=phi_slope_max, z0_max=z0_max, load_full_event=load_full_event, use_cylindrical_std=use_cylindrical_std, use_hit_type=use_hit_type)
+                           n_samples=n_train+n_valid, real_weight=real_weight, n_folders=n_folders, input_dir2=input_dir2, phi_slope_max=phi_slope_max, z0_max=z0_max, load_full_event=load_full_event, use_n_pixels=use_n_pixels, use_cylindrical_std=use_cylindrical_std, use_hit_type=use_hit_type, force_inputdir2_nontrigger=force_inputdir2_nontrigger)
 
     if n_folders == 1:
         train_data, valid_data = random_split(data, [n_train, n_valid])

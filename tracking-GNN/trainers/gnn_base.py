@@ -115,7 +115,8 @@ class GNNBaseTrainer(object):
         if self.summaries is None:
             self.summaries = pd.DataFrame([summaries])
         else:
-            self.summaries = self.summaries.append([summaries], ignore_index=True)
+            summaries = pd.DataFrame([summaries])
+            self.summaries = pd.concat([self.summaries, summaries], ignore_index=True)
         if self.output_dir is not None:
             summary_file = os.path.join(self.output_dir, 'summaries_%i.csv' % self.rank)
             self.summaries.to_csv(summary_file, index=False)
@@ -209,6 +210,7 @@ class GNNBaseTrainer(object):
             # Train on this epoch
             start_time = time.time()
             summary = self.train_epoch(train_data_loader)
+
             self.lr_scheduler.step()
             summary['epoch'] = epoch
             summary['train_time'] = time.time() - start_time
@@ -218,10 +220,17 @@ class GNNBaseTrainer(object):
                 start_time = time.time()
                 summary.update(self.evaluate(valid_data_loader))
                 summary['valid_time'] = time.time() - start_time
-
+                
             # Save summary, checkpoint
             self.save_summary(summary)
             if self.output_dir is not None and self.rank == 0:
                 self.write_checkpoint(checkpoint_id=epoch)
+
+            #if 'valid_label_acc' in summary and summary['valid_label_acc'] < 0.6:
+            #        break
+
+
+
+
             
         return self.summaries

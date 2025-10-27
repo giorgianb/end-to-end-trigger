@@ -37,18 +37,20 @@ class SparseGNNTrainer(GNNBaseTrainer):
             batch = batch.to(self.device)
             self.model.zero_grad()
             batch_output = self.model(batch)
-            batch_loss = self.loss_func(batch_output, batch.y.float(), weight=batch.w)
+            mask = batch_output == batch_output
+            batch_loss = self.loss_func(batch_output[mask], batch.y.float()[mask], weight=batch.w[mask])
             batch_loss.backward()
             self.optimizer.step()
             sum_loss += batch_loss.item()
 
             # Count number of correct predictions
-            batch_pred = torch.sigmoid(batch_output)
-            matches = ((batch_pred > 0.5) == (batch.y > 0.5))
-            edge_true = ((batch_pred > 0.5) & (batch.y > 0.5)).sum()
-            edge_count = (batch.y > 0.5).sum()
-            nonedge_true = ((batch_pred < 0.5) & (batch.y < 0.5)).sum()
-            nonedge_count = (batch.y < 0.5).sum()
+            batch_pred = torch.sigmoid(batch_output[mask])
+            matches = ((batch_pred > 0.5) == (batch.y[mask] > 0.5))
+            edge_true = ((batch_pred > 0.5) & (batch.y[mask] > 0.5)).sum()
+            #print(f'{(batch.y > 0.5).sum().item()/batch.y.shape[0]=} {(batch_pred > 0.5).sum().item()/batch.y.shape[0]=}')
+            edge_count = (batch.y[mask] > 0.5).sum()
+            nonedge_true = ((batch_pred < 0.5) & (batch.y[mask] < 0.5)).sum()
+            nonedge_count = (batch.y[mask] < 0.5).sum()
             sum_correct += matches.sum().item()
             sum_edge_true += edge_true.item()
             sum_edge += edge_count.item()
@@ -65,13 +67,14 @@ class SparseGNNTrainer(GNNBaseTrainer):
                 self.logger.debug('  train batch %i loss %.4f l1 %.2f l2 %.4f grad %.3f idx %i',
                                   i, batch_loss.item(), l1, l2, grad_norm, batch.i[0].item())
 
+        data_loader.dataset.dataset.epoch += 1
         # Summarize the epoch
         n_batches = i + 1
         summary['lr'] = self.optimizer.param_groups[0]['lr']
         summary['train_loss'] = sum_loss / n_batches
         summary['train_acc'] = sum_correct / sum_total
         summary['recall'] = sum_edge_true / sum_edge
-        summary['precision'] = sum_edge_true / (sum_edge_true + sum_nonedge - sum_nonedge_true)
+        summary['precision'] = sum_edge_true / (sum_edge_true + sum_nonedge - sum_nonedge_true) if sum_edge_true + sum_nonedge - sum_nonedge_true != 0 else 1
         summary['f1'] = 2 * summary['recall'] * summary['precision'] / (summary['recall'] + summary['precision'])
         summary['l1'] = get_weight_norm(self.model, 1)
         summary['l2'] = get_weight_norm(self.model, 2)
@@ -122,16 +125,17 @@ class SparseGNNTrainer(GNNBaseTrainer):
 
             # Make predictions on this batch
             batch_output = self.model(batch)
-            batch_loss = self.loss_func(batch_output, batch.y.float()).item()
+            mask = batch_output == batch_output
+            batch_loss = self.loss_func(batch_output[mask], batch.y.float()[mask]).item()
             sum_loss += batch_loss
 
             # Count number of correct predictions
-            batch_pred = torch.sigmoid(batch_output)
-            matches = ((batch_pred > 0.5) == (batch.y > 0.5))
-            edge_true = ((batch_pred > 0.5) & (batch.y > 0.5)).sum()
-            edge_count = (batch.y > 0.5).sum()
-            nonedge_true = ((batch_pred < 0.5) & (batch.y < 0.5)).sum()
-            nonedge_count = (batch.y < 0.5).sum()
+            batch_pred = torch.sigmoid(batch_output[mask])
+            matches = ((batch_pred > 0.5) == (batch.y[mask] > 0.5))
+            edge_true = ((batch_pred > 0.5) & (batch.y[mask] > 0.5)).sum()
+            edge_count = (batch.y[mask] > 0.5).sum()
+            nonedge_true = ((batch_pred < 0.5) & (batch.y[mask] < 0.5)).sum()
+            nonedge_count = (batch.y[mask] < 0.5).sum()
             sum_correct += matches.sum().item()
             sum_edge_true += edge_true.item()
             sum_edge += edge_count.item()
@@ -140,13 +144,15 @@ class SparseGNNTrainer(GNNBaseTrainer):
             sum_total += matches.numel()
             self.logger.debug(' valid batch %i, loss %.4f', i, batch_loss)
 
+        data_loader.dataset.dataset.epoch += 1
         # Summarize the validation epoch
         n_batches = i + 1
         summary['valid_loss'] = sum_loss / n_batches
         summary['valid_acc'] = sum_correct / sum_total
+        summary['valid_label_acc'] = summary['valid_acc']
         summary['recall'] = sum_edge_true / sum_edge
-        summary['precision'] = sum_edge_true / (sum_edge_true + sum_nonedge - sum_nonedge_true)
-        print(f'{sum_edge_true=} {sum_edge=} {sum_nonedge_true=} {sum_nonedge=}')
+        summary['precision'] = sum_edge_true / (sum_edge_true + sum_nonedge - sum_nonedge_true) if (sum_edge_true + sum_nonedge - sum_nonedge_true) != 0 else 0
+        #print(f'{sum_edge_true=} {sum_edge=} {sum_nonedge_true=} {sum_nonedge=}')
         f1 = 2 * summary['recall'] * summary['precision'] / (summary['recall'] + summary['precision']) if (summary['recall'] + summary['precision'] != 0) else 0
         summary['f1'] = f1
         self.logger.debug(' Processed %i samples in %i batches',

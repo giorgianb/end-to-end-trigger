@@ -35,6 +35,8 @@ class EventInfo:
     particle_id: np.ndarray
     particle_type: np.ndarray
     parent_particle_type: np.ndarray
+    active_node: np.ndarray
+
 
 def calc_dphi(phi1, phi2):
     """Computes phi2-phi1 given in range [-pi,pi]"""
@@ -103,6 +105,7 @@ def load_file(filename):
                 particle_id=f['particle_id'],
                 particle_type=f['particle_type'],
                 parent_particle_type=f['parent_particle_type'],
+                active_node=np.ones(f['hit_cartesian'].shape[0]),
         )
 
 
@@ -148,10 +151,11 @@ def load_graph(filename, cylindrical_features_scale, phi_slope_max, z0_max, use_
 
 
 
-def multi_load_graph(intt_filename, filenames, cylindrical_features_scale, phi_slope_max, z0_max):
+def multi_load_graph(intt_filename, filenames, cylindrical_features_scale, phi_slope_max, z0_max, use_intt):
     event_info_list = [load_file(intt_filename)] + [load_file(filename) for filename in filenames]
     max_pid = np.max(event_info_list[0].particle_id)
-    for event_info in event_info_list[1:]:
+    start = int(use_intt)
+    for i, event_info in enumerate(event_info_list[start:]):
         # Node mask
         mask = event_info.layer_id < 3
         event_info.hit_cartesian = event_info.hit_cartesian[mask]
@@ -160,12 +164,18 @@ def multi_load_graph(intt_filename, filenames, cylindrical_features_scale, phi_s
         event_info.n_pixels = event_info.n_pixels[mask]
         event_info.momentum = event_info.momentum[mask]
         event_info.energy = event_info.energy[mask]
-        event_info.particle_id = event_info.particle_id[mask] + max_pid
+        if i != 0 or use_intt: 
+            # Only rewrite the particle id if it is not the first event
+            event_info.particle_id = event_info.particle_id[mask] + max_pid
+        else:
+            event_info.particle_id = event_info.particle_id[mask]
+
         event_info.track_origin = event_info.track_origin[mask]
         max_pid = np.max(event_info.particle_id)
         event_info.particle_type = event_info.particle_type[mask]
         event_info.parent_particle_type = event_info.parent_particle_type[mask]
         event_info.trigger_node = event_info.trigger_node[mask]
+        event_info.active_node = np.zeros_like(event_info.active_node[mask])
 
     event_info = EventInfo(
             hit_cartesian=np.concatenate([event_info.hit_cartesian for event_info in event_info_list], axis=0),
@@ -186,7 +196,8 @@ def multi_load_graph(intt_filename, filenames, cylindrical_features_scale, phi_s
             edge_z0=None,
             edge_phi_slope=None,
             phi_slope_max=phi_slope_max,
-            z0_max=z0_max
+            z0_max=z0_max,
+            active_node=np.concatenate([event_info.active_node for event_info in event_info_list], axis=0)
         )
 
 
@@ -201,8 +212,9 @@ def multi_load_graph(intt_filename, filenames, cylindrical_features_scale, phi_s
     event_info.edge_phi_slope = phi_slope
     event_info.edge_z0 = z0
 
-    kept_pid = np.unique(event_info.particle_id[event_info.layer_id >= 3])
-    event_info.particle_id[~np.isin(event_info.particle_id, kept_pid)] = np.nan
+    # TODO: figure out why we ever had this?
+    #kept_pid = np.unique(event_info.particle_id[event_info.layer_id >= 3])
+    #event_info.particle_id[~np.isin(event_info.particle_id, kept_pid)] = np.nan
 
     start, end = edge_index
     y = event_info.particle_id[start] == event_info.particle_id[end]
@@ -259,6 +271,7 @@ class HitGraphDataset(Dataset):
 
             
         w = y * self.real_weight + (1-y) * self.fake_weight
+        #print(f'{np.sum(y)/y.shape[0]=}')
         if self.load_full_event:
             return torch_geometric.data.Data(
                     x=torch.from_numpy(x).to(torch.float),
@@ -267,6 +280,7 @@ class HitGraphDataset(Dataset):
                     w=torch.from_numpy(w).to(torch.float),
                     i=index, 
                     filename=event_file_name,
+                    active_node=torch.from_numpy(event_info.active_node),
                     event_info=event_info
             )
         else:
@@ -276,6 +290,7 @@ class HitGraphDataset(Dataset):
                     y=torch.from_numpy(y).to(torch.long), 
                     w=torch.from_numpy(w).to(torch.float),
                     i=index, 
+                    active_node=torch.from_numpy(event_info.active_node),
                     filename=event_file_name,
             )
        
